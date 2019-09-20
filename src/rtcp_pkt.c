@@ -32,9 +32,14 @@
 
 #include "rtp_priv.h"
 
+/* The max length in bits of the 'useful data' in a packet chunk. */
+#define RUN_LENGTH_CHUNK_ACK_LG 13
+#define STATUS_VECTOR_CHUNK_ACK_LG 14
+#define STATUS_VECTOR_TWO_BIT_SYMBOLS_MASK 0x4000
+#define STATUS_VECTOR_CHUNK_MASK 0x8000
+
 /* clang-format off */
-/* codecheck_ignore[COMPLEX_MACRO] */
-#define CHECK(_x) if ((res = (_x)) < 0) goto out
+#define CHECK(_x) do { if ((res = (_x)) < 0) goto out; } while (0)
 /* clang-format on */
 
 
@@ -142,6 +147,33 @@ out:
 }
 
 
+/**
+ * Get the RTCP Feedback packet chunks 'status'.
+ * This means:
+ *	- symbol list in Status Vector Chunk
+ *	- run length in Run Length Chunk
+ * Refer to google congestion control draft for more info:
+ * draft-holmer-rmcat-transport-wide-cc-extensions-01.pdf
+ */
+static uint16_t
+build_rtcpfb_chunk_status(uint8_t *symbols, uint16_t len, bool two_bit_symbols)
+{
+	const int bits_per_symbol = two_bit_symbols ? 2 : 1;
+	const int nb_symbols = STATUS_VECTOR_CHUNK_ACK_LG / bits_per_symbol;
+
+	uint16_t status = STATUS_VECTOR_CHUNK_MASK;
+	if (two_bit_symbols)
+		status |= STATUS_VECTOR_TWO_BIT_SYMBOLS_MASK;
+
+	for (int i = 0; i < len; i++) {
+		const int bit_pos = (nb_symbols - 1 - i) * bits_per_symbol;
+		status |= symbols[i] << bit_pos;
+	}
+
+	return status;
+}
+
+
 const char *rtcp_pkt_type_str(uint8_t type)
 {
 	switch (type) {
@@ -155,6 +187,8 @@ const char *rtcp_pkt_type_str(uint8_t type)
 		return "BYE";
 	case RTCP_PKT_TYPE_APP:
 		return "APP";
+	case RTCP_PKT_TYPE_RTPFB:
+		return "RTPFB";
 	default:
 		return "UNKNOWN";
 	}
@@ -396,7 +430,157 @@ out:
 }
 
 
-static int rtcp_pkt_read_header(struct pomp_buffer *buf,
+/**
+ * RTPFB Congestion Control Feedback
+ */
+int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
+			 size_t *pos,
+			 const struct rtcp_pkt_rtpfb_report *rtpfb)
+{
+	int res = 0;
+	struct rtcp_pkt_header header;
+	size_t header_pos = 0;
+
+	ULOG_ERRNO_RETURN_ERR_IF(buf == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(pos == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(rtpfb == NULL, EINVAL);
+
+	/* Remember where to write header and skip it */
+	header_pos = *pos;
+	*pos += RTCP_PKT_HEADER_SIZE;
+
+	CHECK(rtp_write_u32(buf, pos, rtpfb->sender_ssrc));
+	CHECK(rtp_write_u32(buf, pos, rtpfb->media_ssrc));
+	CHECK(rtp_write_u16(buf, pos, rtpfb->base_seq));
+	CHECK(rtp_write_u16(buf, pos, rtpfb->status_count));
+
+	CHECK(rtp_write_u16(buf, pos, rtpfb->ref_time >> 8));
+	CHECK(rtp_write_u8(buf, pos, rtpfb->ref_time & 0xFF));
+	CHECK(rtp_write_u8(buf, pos, rtpfb->feedback_pkt_count));
+
+	/* Write packet chunks */
+	struct pkt_chunk {
+		/* Represents the Run Length in a Run Length Chunk.
+		 * Represents Status symbol list in Status Vector Chunk. */
+		uint8_t ack[STATUS_VECTOR_CHUNK_ACK_LG];
+		/* Boolean value to indicate if it is
+		 * a run length chunk or a status chunk */
+		uint8_t run;
+		/* Boolean value to indicate if it is a status with
+		 * only small deltas or also contains large deltas */
+		uint8_t large;
+		uint16_t pos;
+	};
+
+	uint16_t i, j;
+	struct pkt_chunk chunk;
+	chunk.run = 1;
+	chunk.large = 0;
+	chunk.pos = 0;
+	for (i = 0; i < rtpfb->status_count; ++i) {
+		/* Check if chunk should be written */
+		if (chunk.pos == STATUS_VECTOR_CHUNK_ACK_LG &&
+		    chunk.large == 0 && chunk.run == 0) {
+			/* Status Vector Chunk containing 14 1-bits symbols */
+			uint16_t status = build_rtcpfb_chunk_status(
+				chunk.ack, chunk.pos, false);
+			CHECK(rtp_write_u16(buf, pos, status));
+			chunk.pos = 0;
+		} else if (chunk.pos >= 7 && chunk.large && chunk.run == 0) {
+			/* Status Vector Chunk containing 7 2-bits symbols */
+			uint16_t status = build_rtcpfb_chunk_status(
+				chunk.ack, chunk.pos, true);
+			CHECK(rtp_write_u16(buf, pos, status));
+			uint8_t left = chunk.pos - 7;
+			for (j = 0; j < left; ++j)
+				chunk.ack[j] = chunk.ack[j + 7];
+			chunk.pos = left;
+		} else if (chunk.pos >= STATUS_VECTOR_CHUNK_ACK_LG &&
+			   chunk.ack[0] !=
+				   rtpfb->feedbacks[i].pkt_status_symbol) {
+			uint16_t status =
+				(chunk.ack[0] << RUN_LENGTH_CHUNK_ACK_LG) |
+				chunk.pos;
+			CHECK(rtp_write_u16(buf, pos, status));
+			chunk.pos = 0;
+		}
+		if (chunk.pos == 0) {
+			chunk.large = 0;
+			chunk.run = 1;
+		}
+
+		if (chunk.pos < STATUS_VECTOR_CHUNK_ACK_LG) {
+			chunk.ack[chunk.pos] =
+				rtpfb->feedbacks[i].pkt_status_symbol;
+			if (rtpfb->feedbacks[i].pkt_status_symbol > 1)
+				chunk.large = 1;
+			if (chunk.pos > 0 &&
+			    chunk.ack[chunk.pos - 1] != chunk.ack[chunk.pos])
+				chunk.run = 0;
+		}
+		chunk.pos++;
+	}
+
+	if (chunk.pos != 0) {
+		if (chunk.run) {
+			uint16_t status =
+				(chunk.ack[0] << RUN_LENGTH_CHUNK_ACK_LG) |
+				chunk.pos;
+			CHECK(rtp_write_u16(buf, pos, status));
+		} else if (chunk.large) {
+			/* Status Vector Chunk containing 7 2-bits symbols with
+			 * long delta */
+
+			/* Write a first chunk if needed */
+			if (chunk.pos >= 7) {
+				uint16_t status = build_rtcpfb_chunk_status(
+					chunk.ack, chunk.pos, true);
+				CHECK(rtp_write_u16(buf, pos, status));
+				uint8_t left = chunk.pos - 7;
+				for (j = 0; j < left; ++j)
+					chunk.ack[j] = chunk.ack[j + 7];
+				chunk.pos = left;
+			}
+			if (chunk.pos != 0) {
+				uint16_t status = build_rtcpfb_chunk_status(
+					chunk.ack, chunk.pos, true);
+				CHECK(rtp_write_u16(buf, pos, status));
+			}
+		} else {
+			/* Status Vector Chunk containing 14 1-bits symbols
+			 * with short delta */
+			uint16_t status = build_rtcpfb_chunk_status(
+				chunk.ack, chunk.pos, false);
+			CHECK(rtp_write_u16(buf, pos, status));
+		}
+	}
+
+	for (i = 0; i < rtpfb->status_count; ++i) {
+		int16_t delta = rtpfb->feedbacks[i].recv_delta;
+		if (rtpfb->feedbacks[i].pkt_status_symbol == 1)
+			CHECK(rtp_write_u8(buf, pos, delta));
+		else if (rtpfb->feedbacks[i].pkt_status_symbol == 2)
+			CHECK(rtp_write_u16(buf, pos, delta));
+	}
+
+	while ((*pos) % 4)
+		CHECK(rtp_write_u8(buf, pos, 0));
+
+	/* Write header */
+	memset(&header, 0, sizeof(header));
+	header.flags =
+		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
+		(15 << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
+	header.type = RTCP_PKT_TYPE_RTPFB;
+	header.len = ((*pos - header_pos) / 4) - 1;
+	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
+
+out:
+	return res;
+}
+
+
+static int rtcp_pkt_read_header(const struct pomp_buffer *buf,
 				size_t *pos,
 				struct rtcp_pkt_header *header)
 {
@@ -414,7 +598,7 @@ out:
  * 6.4.1 SR: Sender Report RTCP Packet
  * 6.4.2 RR: Receiver Report RTCP Packet
  */
-static int rtcp_pkt_read_report_block(struct pomp_buffer *buf,
+static int rtcp_pkt_read_report_block(const struct pomp_buffer *buf,
 				      size_t *pos,
 				      const struct rtcp_pkt_header *header,
 				      struct rtcp_pkt_report_block *rb)
@@ -438,7 +622,7 @@ out:
 /**
  * 6.4.1 SR: Sender Report RTCP Packet
  */
-static int rtcp_pkt_read_sender_report(struct pomp_buffer *buf,
+static int rtcp_pkt_read_sender_report(const struct pomp_buffer *buf,
 				       size_t *pos,
 				       size_t end,
 				       const struct rtcp_pkt_header *header,
@@ -473,7 +657,7 @@ out:
 /**
  * 6.4.2 RR: Receiver Report RTCP Packet
  */
-static int rtcp_pkt_read_receiver_report(struct pomp_buffer *buf,
+static int rtcp_pkt_read_receiver_report(const struct pomp_buffer *buf,
 					 size_t *pos,
 					 size_t end,
 					 const struct rtcp_pkt_header *header,
@@ -504,7 +688,7 @@ out:
  * 6.5 SDES: Source Description RTCP Packet
  * 6.5.8 PRIV: Private Extensions SDES Item
  */
-static int rtcp_pkt_read_sdes_item(struct pomp_buffer *buf,
+static int rtcp_pkt_read_sdes_item(const struct pomp_buffer *buf,
 				   size_t *pos,
 				   size_t end,
 				   const struct rtcp_pkt_header *header,
@@ -558,7 +742,7 @@ out:
 /**
  * 6.5 SDES: Source Description RTCP Packet
  */
-static int rtcp_pkt_read_sdes_chunk(struct pomp_buffer *buf,
+static int rtcp_pkt_read_sdes_chunk(const struct pomp_buffer *buf,
 				    size_t *pos,
 				    size_t end,
 				    const struct rtcp_pkt_header *header,
@@ -595,7 +779,7 @@ out:
 /**
  * 6.5 SDES: Source Description RTCP Packet
  */
-static int rtcp_pkt_read_sdes(struct pomp_buffer *buf,
+static int rtcp_pkt_read_sdes(const struct pomp_buffer *buf,
 			      size_t *pos,
 			      size_t end,
 			      const struct rtcp_pkt_header *header,
@@ -618,7 +802,7 @@ out:
 /**
  * 6.6 BYE: Goodbye RTCP Packet
  */
-static int rtcp_pkt_read_bye(struct pomp_buffer *buf,
+static int rtcp_pkt_read_bye(const struct pomp_buffer *buf,
 			     size_t *pos,
 			     size_t end,
 			     const struct rtcp_pkt_header *header,
@@ -659,7 +843,7 @@ out:
 /**
  * 6.7 APP: Application-Defined RTCP Packet
  */
-static int rtcp_pkt_read_app(struct pomp_buffer *buf,
+static int rtcp_pkt_read_app(const struct pomp_buffer *buf,
 			     size_t *pos,
 			     size_t end,
 			     const struct rtcp_pkt_header *header,
@@ -688,7 +872,150 @@ out:
 }
 
 
-int rtcp_pkt_read(struct pomp_buffer *buf,
+static int
+rtcp_pkt_read_rtpfb_run_length_chunk(uint16_t chunk,
+				     const struct rtcp_pkt_rtpfb_report *report,
+				     size_t *pos)
+{
+	int res = 0;
+	size_t j = *pos;
+	size_t len = (chunk & 0x1FFF) + j;
+	uint8_t status_symbol;
+
+	CHECK(report->status_count - len);
+	status_symbol = (chunk >> RUN_LENGTH_CHUNK_ACK_LG) & 0x03;
+	for (; j < len; j++) {
+		report->feedbacks[j].seq_num = report->base_seq + j;
+		report->feedbacks[j].pkt_status_symbol = status_symbol;
+	}
+	*pos = j;
+
+out:
+	return res;
+}
+
+
+static int rtcp_pkt_read_rtpfb_status_vector_chunk(
+	uint16_t chunk,
+	const struct rtcp_pkt_rtpfb_report *report,
+	size_t *pos)
+{
+	int res = 0;
+	size_t len = 0;
+	size_t i = *pos;
+	size_t j = 1;
+
+	if ((chunk & 0x4000) == 0) {
+		/* Small delta chunk */
+		len = STATUS_VECTOR_CHUNK_ACK_LG;
+		if (len + i >= report->status_count)
+			len = report->status_count - i;
+		CHECK(report->status_count - len);
+		while (j <= len) {
+			const uint8_t offset = STATUS_VECTOR_CHUNK_ACK_LG - j;
+			const uint8_t symbol = (chunk >> offset) & 0x01;
+			report->feedbacks[i].pkt_status_symbol = symbol;
+			report->feedbacks[i].seq_num = report->base_seq + i;
+			++i;
+			++j;
+		}
+	} else {
+		/* Large delta chunk */
+		len = STATUS_VECTOR_CHUNK_ACK_LG / 2;
+		if (len + i >= report->status_count)
+			len = report->status_count - i;
+		CHECK(report->status_count - len);
+		while (j <= len) {
+			const uint8_t offset =
+				STATUS_VECTOR_CHUNK_ACK_LG - j * 2;
+			const uint8_t symbol = (chunk >> offset) & 0x03;
+			report->feedbacks[i].pkt_status_symbol = symbol;
+			report->feedbacks[i].seq_num = report->base_seq + i;
+			++i;
+			++j;
+		}
+	}
+	*pos = i;
+
+out:
+	return res;
+}
+
+
+static int rtcp_pkt_read_rtpfb(const struct pomp_buffer *buf,
+			       size_t *pos,
+			       size_t end,
+			       const struct rtcp_pkt_header *header,
+			       const struct rtcp_pkt_read_cbs *cbs,
+			       void *userdata)
+{
+	int res = 0;
+	size_t i = 0;
+	struct rtcp_pkt_rtpfb_report report;
+	report.status_count = 0;
+	report.feedbacks = NULL;
+	CHECK(rtp_read_u32(buf, pos, &report.sender_ssrc));
+	CHECK(rtp_read_u32(buf, pos, &report.media_ssrc));
+	CHECK(rtp_read_u16(buf, pos, &report.base_seq));
+	CHECK(rtp_read_u16(buf, pos, &report.status_count));
+	CHECK(rtp_read_u32(buf, pos, &report.ref_time));
+	report.feedback_pkt_count = report.ref_time & 0xFF;
+	report.ref_time = report.ref_time >> 8;
+
+	if (report.status_count > RTPFB_MAX_PKT) {
+		res = -E2BIG;
+		goto out;
+	}
+	report.feedbacks = calloc(report.status_count,
+				  sizeof(struct rtcp_pkt_rtpfb_feedback));
+	if (report.feedbacks == NULL) {
+		res = -ENOMEM;
+		goto out;
+	}
+
+	while (i < report.status_count) {
+		uint16_t chunk;
+		CHECK(rtp_read_u16(buf, pos, &chunk));
+		if ((chunk & 0x8000) == 0) {
+			rtcp_pkt_read_rtpfb_run_length_chunk(
+				chunk, &report, &i);
+		} else {
+			rtcp_pkt_read_rtpfb_status_vector_chunk(
+				chunk, &report, &i);
+		}
+	}
+
+	uint8_t short_delta;
+	uint16_t long_delta;
+	for (i = 0; i < report.status_count; ++i) {
+		switch (report.feedbacks[i].pkt_status_symbol) {
+		case 0:
+		case 3:
+			report.feedbacks[i].recv_delta = 0;
+			break;
+		case 1:
+			CHECK(rtp_read_u8(buf, pos, &short_delta));
+			report.feedbacks[i].recv_delta = short_delta;
+			break;
+		case 2:
+			CHECK(rtp_read_u16(buf, pos, &long_delta));
+			report.feedbacks[i].recv_delta = long_delta;
+			break;
+		}
+	}
+
+	if (cbs->rtpfb_report != NULL)
+		(*cbs->rtpfb_report)(&report, userdata);
+
+out:
+	if (report.feedbacks != NULL)
+		free(report.feedbacks);
+
+	return res;
+}
+
+
+int rtcp_pkt_read(const struct pomp_buffer *buf,
 		  const struct rtcp_pkt_read_cbs *cbs,
 		  void *userdata)
 {
@@ -757,6 +1084,9 @@ int rtcp_pkt_read(struct pomp_buffer *buf,
 			rtcp_pkt_read_app(
 				buf, &pos, end, &header, cbs, userdata);
 			break;
+		case RTCP_PKT_TYPE_RTPFB:
+			rtcp_pkt_read_rtpfb(
+				buf, &pos, end, &header, cbs, userdata);
 		}
 
 		/* In any case, continue after the payload based on the length

@@ -29,6 +29,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,14 +82,15 @@ rtp_write_u64(struct pomp_buffer *buf, size_t *pos, uint64_t v)
 }
 
 
-static inline int rtp_read_u8(struct pomp_buffer *buf, size_t *pos, uint8_t *v)
+static inline int
+rtp_read_u8(const struct pomp_buffer *buf, size_t *pos, uint8_t *v)
 {
 	return pomp_buffer_read(buf, pos, v, sizeof(*v));
 }
 
 
 static inline int
-rtp_read_u16(struct pomp_buffer *buf, size_t *pos, uint16_t *v)
+rtp_read_u16(const struct pomp_buffer *buf, size_t *pos, uint16_t *v)
 {
 	int res = 0;
 	res = pomp_buffer_read(buf, pos, v, sizeof(*v));
@@ -99,7 +101,7 @@ rtp_read_u16(struct pomp_buffer *buf, size_t *pos, uint16_t *v)
 
 
 static inline int
-rtp_read_u32(struct pomp_buffer *buf, size_t *pos, uint32_t *v)
+rtp_read_u32(const struct pomp_buffer *buf, size_t *pos, uint32_t *v)
 {
 	int res = 0;
 	res = pomp_buffer_read(buf, pos, v, sizeof(*v));
@@ -110,7 +112,7 @@ rtp_read_u32(struct pomp_buffer *buf, size_t *pos, uint32_t *v)
 
 
 static inline int
-rtp_read_u64(struct pomp_buffer *buf, size_t *pos, uint64_t *v)
+rtp_read_u64(const struct pomp_buffer *buf, size_t *pos, uint64_t *v)
 {
 	int res = 0;
 	uint32_t _v[2];

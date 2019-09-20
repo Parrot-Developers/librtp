@@ -29,10 +29,8 @@
 ULOG_DECLARE_TAG(rtp);
 
 /* clang-format off */
-/* codecheck_ignore[COMPLEX_MACRO] */
-#define CHECK(_x) if ((res = (_x)) < 0) goto out
+#define CHECK(_x) do { if ((res = (_x)) < 0) goto out; } while (0)
 /* clang-format on */
-
 
 int rtp_pkt_new(struct rtp_pkt **ret_obj)
 {
@@ -118,7 +116,7 @@ int rtp_pkt_finalize_header(struct rtp_pkt *pkt)
 }
 
 
-static int rtp_pkt_read_header(struct pomp_buffer *buf,
+static int rtp_pkt_read_header(const struct pomp_buffer *buf,
 			       size_t *pos,
 			       struct rtp_pkt_header *header)
 {

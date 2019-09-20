@@ -50,6 +50,7 @@
 #define RTCP_PKT_TYPE_SDES 202
 #define RTCP_PKT_TYPE_BYE 203
 #define RTCP_PKT_TYPE_APP 204
+#define RTCP_PKT_TYPE_RTPFB 205
 
 #define RTCP_PKT_SDES_TYPE_END 0
 #define RTCP_PKT_SDES_TYPE_CNAME 1
@@ -60,6 +61,10 @@
 #define RTCP_PKT_SDES_TYPE_TOOL 6
 #define RTCP_PKT_SDES_TYPE_NOTE 7
 #define RTCP_PKT_SDES_TYPE_PRIV 8
+
+/* 2000 pkts should be enough with a streaming at 9Mbits/s,
+ * pkt average size of 500 and report every 100ms. */
+#define RTPFB_MAX_PKT 2000
 
 
 /**
@@ -217,6 +222,65 @@ struct rtcp_pkt_receiver_report {
 };
 
 
+/**
+ * RTPFB : Transport Feedback Report
+ *
+ * Chapter 3.1
+ * https://tools.ietf.org/html/draft-holmer-rmcat-transport-wide-cc-extensions-01
+ *
+ *     0                   1                   2                   3
+ *     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    |V=2|P|  FMT=15 |    PT=205     |           length              |
+ *    +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+ *    |                     SSRC of packet sender                     |
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    |                      SSRC of media source                     |
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    |      base sequence number     |      packet status count      |
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    |                 reference time                | fb pkt. count |
+ *    +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+ *    |          packet chunk         |         packet chunk          |
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    :                              ...                              :
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    |         packet chunk          |  recv delta   |  recv delta   |
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    :                              ...                              :
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    |           recv delta          |  recv delta   | zero padding  |
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ * Feedback Message Type: 5 bits
+ * sender SSRC: 32 bits
+ * media SSRC: 32 bits
+ * base sequence number: 16 bits, sequence number of first packet reported
+ * packet status count: 16 bits, number of packets reported
+ * reference time: 24 bits absolute arbitrary reference for recv deltas (x64ms)
+ * fb pkt. count: 8 bits counter of the feedback packet report
+ * packet chunk: 16 bits list of packet status chunk in seq number order
+ * recv delta: 8/16 bits packet reception time delta to reference time (x250us)
+ */
+struct rtcp_pkt_rtpfb_feedback {
+	uint16_t seq_num;
+	int16_t recv_delta;
+	uint8_t pkt_status_symbol;
+};
+
+struct rtcp_pkt_rtpfb_report {
+	uint32_t sender_ssrc;
+	uint32_t media_ssrc;
+	uint16_t base_seq;
+	uint16_t status_count;
+	uint32_t ref_time;
+	uint8_t feedback_pkt_count;
+
+	/* Array length is feedback_pkt_count (max is RTPFB_MAX_PKT) */
+	struct rtcp_pkt_rtpfb_feedback *feedbacks;
+};
+
+
 struct rtcp_pkt_sdes_item {
 	uint8_t type;
 	uint8_t data_len;
@@ -336,6 +400,9 @@ struct rtcp_pkt_read_cbs {
 	void (*bye)(const struct rtcp_pkt_bye *bye, void *userdata);
 
 	void (*app)(const struct rtcp_pkt_app *app, void *userdata);
+
+	void (*rtpfb_report)(const struct rtcp_pkt_rtpfb_report *rtpfb,
+			     void *userdata);
 };
 
 
@@ -378,7 +445,13 @@ int rtcp_pkt_write_app(struct pomp_buffer *buf,
 
 
 RTP_API
-int rtcp_pkt_read(struct pomp_buffer *buf,
+int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
+			 size_t *pos,
+			 const struct rtcp_pkt_rtpfb_report *cr);
+
+
+RTP_API
+int rtcp_pkt_read(const struct pomp_buffer *buf,
 		  const struct rtcp_pkt_read_cbs *cbs,
 		  void *userdata);
 

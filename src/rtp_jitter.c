@@ -175,7 +175,7 @@ static uint64_t compute_skew(struct rtp_jitter *self,
 			self->window_size = self->window_pos;
 			self->window_pos = 0;
 			self->skew_avg = self->window_min;
-		} else {
+		} else if (rx_timestamp >= self->window_start_timestamp) {
 			uint32_t perc_time =
 				(rx_timestamp - self->window_start_timestamp) *
 				100 / SKEW_WINDOW_TIMEOUT;
@@ -188,6 +188,13 @@ static uint64_t compute_skew(struct rtp_jitter *self,
 			self->skew_avg += perc *
 					  (self->window_min - self->skew_avg) /
 					  10000;
+		} else {
+			/* Might be different links */
+			ULOGD("reset skew: "
+			      "window_start_timestamp > rx_timestamp");
+			reset_skew(self, rx_timestamp, rtp_timestamp);
+			out_timestamp = rx_timestamp;
+			goto out;
 		}
 	} else {
 		/* Remember the old value and set the new one */
@@ -262,6 +269,7 @@ static uint64_t compute_skew(struct rtp_jitter *self,
 		out_timestamp = rx_timestamp;
 	}
 
+out:
 	return out_timestamp;
 }
 
