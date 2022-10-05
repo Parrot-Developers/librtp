@@ -115,6 +115,11 @@ struct rtp_pkt {
 		size_t len;
 	} payload;
 
+	struct {
+		size_t off;
+		size_t len;
+	} padding;
+
 	/* To be used in a list */
 	struct list_node node;
 

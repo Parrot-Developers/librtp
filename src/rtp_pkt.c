@@ -226,6 +226,8 @@ int rtp_pkt_read(struct pomp_buffer *buf, struct rtp_pkt *pkt)
 			goto out;
 		}
 		pkt->payload.len -= padding;
+		pkt->padding.off = pkt->payload.off + pkt->payload.len;
+		pkt->padding.len = padding;
 	}
 
 out:
