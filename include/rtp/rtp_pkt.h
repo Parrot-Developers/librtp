@@ -139,6 +139,9 @@ struct rtp_pkt {
 	/** Importance of packet (inherited from the highest importance
 	 *  of included NALUs (sender only) (low numbers are more important) */
 	uint32_t importance;
+
+	/* Additional user data associated with this packet */
+	void *userdata;
 };
 
 
