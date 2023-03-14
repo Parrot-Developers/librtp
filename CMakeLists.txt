@@ -8,7 +8,7 @@ set(LIB_SOURCES
       src/rtp_pkt.c
 )
 
-add_library(${PROJECT_NAME} ${LIB_SOURCES})
+add_library(${PROJECT_NAME} SHARED ${LIB_SOURCES})
 
 if(COMMAND set_up_rpath)
     set_up_rpath()
@@ -17,7 +17,7 @@ else()
 endif()
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
-set_target_properties(rtp PROPERTIES
+set_target_properties(${PROJECT_NAME} PROPERTIES
                     POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
 )
 
