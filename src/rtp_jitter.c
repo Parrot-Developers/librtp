@@ -364,7 +364,8 @@ int rtp_jitter_enqueue(struct rtp_jitter *self, struct rtp_pkt *pkt)
 	self->last_rtp_timestamp = rtp_timestamp;
 
 	if (rtp_diff_seqnum(self->next_seqnum, pkt->header.seqnum) > 0) {
-		/* Old packet */
+		/* Old packet or duplicate of a packet that has already
+		 * been processed */
 		rtp_pkt_destroy(pkt);
 		return 0;
 	}
@@ -373,18 +374,21 @@ int rtp_jitter_enqueue(struct rtp_jitter *self, struct rtp_pkt *pkt)
 	{
 		int16_t diff = rtp_diff_seqnum(item->header.seqnum,
 					       pkt->header.seqnum);
-		if (diff < 0) {
-			list_add_after(&item->node, &pkt->node);
-			return 0;
-		}
-		if (item->header.seqnum == pkt->header.seqnum) {
+		if (diff > 0)
+			continue;
+
+		if (diff == 0) {
 			/* Duplicate packet */
 			rtp_pkt_destroy(pkt);
 			return 0;
 		}
+
+		/* Add in the list in order */
+		list_add_after(&item->node, &pkt->node);
+		return 0;
 	}
 
-	/* First packet (or empty list) */
+	/* Empty list or current packet to be added as first */
 	list_add_before(list_first(&self->packets), &pkt->node);
 	return 0;
 }
