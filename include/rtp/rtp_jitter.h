@@ -70,7 +70,7 @@ int rtp_jitter_process(struct rtp_jitter *self, uint64_t cur_timestamp);
 
 
 RTP_API
-int rtp_jitter_get_info(struct rtp_jitter *self,
+int rtp_jitter_get_info(const struct rtp_jitter *self,
 			uint32_t *clk_rate,
 			uint32_t *jitter_avg,
 			int64_t *skew_avg);

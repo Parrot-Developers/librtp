@@ -155,8 +155,9 @@ out:
  * Refer to google congestion control draft for more info:
  * draft-holmer-rmcat-transport-wide-cc-extensions-01.pdf
  */
-static uint16_t
-build_rtcpfb_chunk_status(uint8_t *symbols, uint16_t len, bool two_bit_symbols)
+static uint16_t build_rtcpfb_chunk_status(const uint8_t *symbols,
+					  uint16_t len,
+					  bool two_bit_symbols)
 {
 	const int bits_per_symbol = two_bit_symbols ? 2 : 1;
 	const int nb_symbols = STATUS_VECTOR_CHUNK_ACK_LG / bits_per_symbol;
@@ -253,11 +254,12 @@ int rtcp_pkt_write_sender_report(struct pomp_buffer *buf,
 
 	/* Write header */
 	memset(&header, 0, sizeof(header));
-	header.flags =
-		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
-		(sr->report_count << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
+	header.flags = ((uint8_t)(RTCP_PKT_VERSION
+				  << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
+			(uint8_t)(sr->report_count
+				  << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT));
 	header.type = RTCP_PKT_TYPE_SR;
-	header.len = (*pos - header_pos) / 4 - 1;
+	header.len = (uint16_t)(*pos - header_pos) / 4 - 1;
 	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
 
 out:
@@ -291,11 +293,12 @@ int rtcp_pkt_write_receiver_report(struct pomp_buffer *buf,
 
 	/* Write header */
 	memset(&header, 0, sizeof(header));
-	header.flags =
-		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
-		(rr->report_count << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
+	header.flags = ((uint8_t)(RTCP_PKT_VERSION
+				  << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
+			(uint8_t)(rr->report_count
+				  << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT));
 	header.type = RTCP_PKT_TYPE_RR;
-	header.len = (*pos - header_pos) / 4 - 1;
+	header.len = (uint16_t)(*pos - header_pos) / 4 - 1;
 	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
 
 out:
@@ -328,11 +331,12 @@ int rtcp_pkt_write_sdes(struct pomp_buffer *buf,
 
 	/* Write header */
 	memset(&header, 0, sizeof(header));
-	header.flags =
-		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
-		(sdes->chunk_count << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
+	header.flags = ((uint8_t)(RTCP_PKT_VERSION
+				  << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
+			(uint8_t)(sdes->chunk_count
+				  << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT));
 	header.type = RTCP_PKT_TYPE_SDES;
-	header.len = (*pos - header_pos) / 4 - 1;
+	header.len = (uint16_t)(*pos - header_pos) / 4 - 1;
 	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
 
 out:
@@ -375,11 +379,12 @@ int rtcp_pkt_write_bye(struct pomp_buffer *buf,
 
 	/* Write header */
 	memset(&header, 0, sizeof(header));
-	header.flags =
-		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
-		(bye->source_count << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
+	header.flags = ((uint8_t)(RTCP_PKT_VERSION
+				  << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
+			(uint8_t)(bye->source_count
+				  << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT));
 	header.type = RTCP_PKT_TYPE_BYE;
-	header.len = (*pos - header_pos) / 4 - 1;
+	header.len = (uint16_t)(*pos - header_pos) / 4 - 1;
 	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
 
 out:
@@ -419,10 +424,11 @@ int rtcp_pkt_write_app(struct pomp_buffer *buf,
 	/* Write header */
 	memset(&header, 0, sizeof(header));
 	header.flags =
-		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
-		(app->subtype << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
+		((uint8_t)(RTCP_PKT_VERSION
+			   << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
+		 (uint8_t)(app->subtype << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT));
 	header.type = RTCP_PKT_TYPE_APP;
-	header.len = (*pos - header_pos) / 4 - 1;
+	header.len = (uint16_t)(*pos - header_pos) / 4 - 1;
 	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
 
 out:
@@ -472,7 +478,8 @@ int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
 		uint16_t pos;
 	};
 
-	uint16_t i, j;
+	uint16_t i;
+	uint16_t j;
 	struct pkt_chunk chunk;
 	chunk.run = 1;
 	chunk.large = 0;
@@ -491,7 +498,15 @@ int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
 			uint16_t status = build_rtcpfb_chunk_status(
 				chunk.ack, chunk.pos, true);
 			CHECK(rtp_write_u16(buf, pos, status));
-			uint8_t left = chunk.pos - 7;
+			if (chunk.pos > UINT8_MAX) {
+				res = -EIO;
+				ULOGE("%s: invalid value for "
+				      "chunk.pos: %u",
+				      __func__,
+				      chunk.pos);
+				goto out;
+			}
+			uint8_t left = (uint8_t)(chunk.pos - 7);
 			for (j = 0; j < left; ++j)
 				chunk.ack[j] = chunk.ack[j + 7];
 			chunk.pos = left;
@@ -499,7 +514,8 @@ int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
 			   chunk.ack[0] !=
 				   rtpfb->feedbacks[i].pkt_status_symbol) {
 			uint16_t status =
-				(chunk.ack[0] << RUN_LENGTH_CHUNK_ACK_LG) |
+				(uint16_t)(chunk.ack[0]
+					   << RUN_LENGTH_CHUNK_ACK_LG) |
 				chunk.pos;
 			CHECK(rtp_write_u16(buf, pos, status));
 			chunk.pos = 0;
@@ -524,7 +540,8 @@ int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
 	if (chunk.pos != 0) {
 		if (chunk.run) {
 			uint16_t status =
-				(chunk.ack[0] << RUN_LENGTH_CHUNK_ACK_LG) |
+				(uint16_t)(chunk.ack[0]
+					   << RUN_LENGTH_CHUNK_ACK_LG) |
 				chunk.pos;
 			CHECK(rtp_write_u16(buf, pos, status));
 		} else if (chunk.large) {
@@ -536,7 +553,15 @@ int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
 				uint16_t status = build_rtcpfb_chunk_status(
 					chunk.ack, chunk.pos, true);
 				CHECK(rtp_write_u16(buf, pos, status));
-				uint8_t left = chunk.pos - 7;
+				if (chunk.pos > UINT8_MAX) {
+					res = -EIO;
+					ULOGE("%s: invalid value for "
+					      "chunk.pos: %u",
+					      __func__,
+					      chunk.pos);
+					goto out;
+				}
+				uint8_t left = (uint8_t)(chunk.pos - 7);
 				for (j = 0; j < left; ++j)
 					chunk.ack[j] = chunk.ack[j + 7];
 				chunk.pos = left;
@@ -572,7 +597,7 @@ int rtcp_pkt_write_rtpfb(struct pomp_buffer *buf,
 		(RTCP_PKT_VERSION << RTCP_PKT_HEADER_FLAGS_VERSION_SHIFT) |
 		(15 << RTCP_PKT_HEADER_FLAGS_COUNT_SHIFT);
 	header.type = RTCP_PKT_TYPE_RTPFB;
-	header.len = ((*pos - header_pos) / 4) - 1;
+	header.len = (uint16_t)((*pos - header_pos) / 4) - 1;
 	CHECK(rtcp_pkt_write_header(buf, &header_pos, &header));
 
 out:
@@ -600,7 +625,6 @@ out:
  */
 static int rtcp_pkt_read_report_block(const struct pomp_buffer *buf,
 				      size_t *pos,
-				      const struct rtcp_pkt_header *header,
 				      struct rtcp_pkt_report_block *rb)
 {
 	int res = 0;
@@ -624,7 +648,6 @@ out:
  */
 static int rtcp_pkt_read_sender_report(const struct pomp_buffer *buf,
 				       size_t *pos,
-				       size_t end,
 				       const struct rtcp_pkt_header *header,
 				       const struct rtcp_pkt_read_cbs *cbs,
 				       void *userdata)
@@ -641,10 +664,8 @@ static int rtcp_pkt_read_sender_report(const struct pomp_buffer *buf,
 	CHECK(rtp_read_u32(buf, pos, &sr.sender_byte_count));
 
 	sr.report_count = RTCP_PKT_HEADER_FLAGS(COUNT, header->flags);
-	for (uint32_t i = 0; i < sr.report_count; i++) {
-		CHECK(rtcp_pkt_read_report_block(
-			buf, pos, header, &sr.reports[i]));
-	}
+	for (uint32_t i = 0; i < sr.report_count; i++)
+		CHECK(rtcp_pkt_read_report_block(buf, pos, &sr.reports[i]));
 
 	if (cbs->sender_report != NULL)
 		(*cbs->sender_report)(&sr, userdata);
@@ -659,7 +680,6 @@ out:
  */
 static int rtcp_pkt_read_receiver_report(const struct pomp_buffer *buf,
 					 size_t *pos,
-					 size_t end,
 					 const struct rtcp_pkt_header *header,
 					 const struct rtcp_pkt_read_cbs *cbs,
 					 void *userdata)
@@ -671,10 +691,8 @@ static int rtcp_pkt_read_receiver_report(const struct pomp_buffer *buf,
 	CHECK(rtp_read_u32(buf, pos, &rr.ssrc));
 
 	rr.report_count = RTCP_PKT_HEADER_FLAGS(COUNT, header->flags);
-	for (uint32_t i = 0; i < rr.report_count; i++) {
-		CHECK(rtcp_pkt_read_report_block(
-			buf, pos, header, &rr.reports[i]));
-	}
+	for (uint32_t i = 0; i < rr.report_count; i++)
+		CHECK(rtcp_pkt_read_report_block(buf, pos, &rr.reports[i]));
 
 	if (cbs->receiver_report != NULL)
 		(*cbs->receiver_report)(&rr, userdata);
@@ -691,7 +709,6 @@ out:
 static int rtcp_pkt_read_sdes_item(const struct pomp_buffer *buf,
 				   size_t *pos,
 				   size_t end,
-				   const struct rtcp_pkt_header *header,
 				   uint32_t ssrc,
 				   const struct rtcp_pkt_read_cbs *cbs,
 				   void *userdata)
@@ -764,7 +781,7 @@ static int rtcp_pkt_read_sdes_chunk(const struct pomp_buffer *buf,
 		/* Rewind and read item */
 		*pos -= 1;
 		CHECK(rtcp_pkt_read_sdes_item(
-			buf, pos, end, header, ssrc, cbs, userdata));
+			buf, pos, end, ssrc, cbs, userdata));
 	}
 
 	/* Align */
@@ -859,7 +876,7 @@ static int rtcp_pkt_read_app(const struct pomp_buffer *buf,
 	CHECK(rtp_read_u32(buf, pos, &app.ssrc));
 	CHECK(rtp_read_u32(buf, pos, &app.name));
 	if (*pos < end) {
-		app.data_len = end - *pos;
+		app.data_len = (uint32_t)(end - *pos);
 		CHECK(pomp_buffer_cread(
 			buf, pos, (const void **)&app.data, app.data_len));
 	}
@@ -885,7 +902,7 @@ rtcp_pkt_read_rtpfb_run_length_chunk(uint16_t chunk,
 	CHECK(report->status_count - len);
 	status_symbol = (chunk >> RUN_LENGTH_CHUNK_ACK_LG) & 0x03;
 	for (; j < len; j++) {
-		report->feedbacks[j].seq_num = report->base_seq + j;
+		report->feedbacks[j].seq_num = (uint16_t)(report->base_seq + j);
 		report->feedbacks[j].pkt_status_symbol = status_symbol;
 	}
 	*pos = j;
@@ -912,10 +929,12 @@ static int rtcp_pkt_read_rtpfb_status_vector_chunk(
 			len = report->status_count - i;
 		CHECK(report->status_count - len);
 		while (j <= len) {
-			const uint8_t offset = STATUS_VECTOR_CHUNK_ACK_LG - j;
+			const uint8_t offset =
+				(uint8_t)(STATUS_VECTOR_CHUNK_ACK_LG - j);
 			const uint8_t symbol = (chunk >> offset) & 0x01;
 			report->feedbacks[i].pkt_status_symbol = symbol;
-			report->feedbacks[i].seq_num = report->base_seq + i;
+			report->feedbacks[i].seq_num =
+				(uint16_t)(report->base_seq + i);
 			++i;
 			++j;
 		}
@@ -927,10 +946,11 @@ static int rtcp_pkt_read_rtpfb_status_vector_chunk(
 		CHECK(report->status_count - len);
 		while (j <= len) {
 			const uint8_t offset =
-				STATUS_VECTOR_CHUNK_ACK_LG - j * 2;
+				(uint8_t)(STATUS_VECTOR_CHUNK_ACK_LG - j * 2);
 			const uint8_t symbol = (chunk >> offset) & 0x03;
 			report->feedbacks[i].pkt_status_symbol = symbol;
-			report->feedbacks[i].seq_num = report->base_seq + i;
+			report->feedbacks[i].seq_num =
+				(uint16_t)(report->base_seq + i);
 			++i;
 			++j;
 		}
@@ -944,8 +964,6 @@ out:
 
 static int rtcp_pkt_read_rtpfb(const struct pomp_buffer *buf,
 			       size_t *pos,
-			       size_t end,
-			       const struct rtcp_pkt_header *header,
 			       const struct rtcp_pkt_read_cbs *cbs,
 			       void *userdata)
 {
@@ -1001,6 +1019,8 @@ static int rtcp_pkt_read_rtpfb(const struct pomp_buffer *buf,
 			CHECK(rtp_read_u16(buf, pos, &long_delta));
 			report.feedbacks[i].recv_delta = long_delta;
 			break;
+		default:
+			break;
 		}
 	}
 
@@ -1022,7 +1042,9 @@ int rtcp_pkt_read(const struct pomp_buffer *buf,
 	int res = 0;
 	struct rtcp_pkt_header header;
 	uint8_t version = 0;
-	size_t len = 0, end = 0, pos = 0;
+	size_t len = 0;
+	size_t end = 0;
+	size_t pos = 0;
 
 	ULOG_ERRNO_RETURN_ERR_IF(buf == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(cbs == NULL, EINVAL);
@@ -1066,11 +1088,11 @@ int rtcp_pkt_read(const struct pomp_buffer *buf,
 		switch (header.type) {
 		case RTCP_PKT_TYPE_SR:
 			rtcp_pkt_read_sender_report(
-				buf, &pos, end, &header, cbs, userdata);
+				buf, &pos, &header, cbs, userdata);
 			break;
 		case RTCP_PKT_TYPE_RR:
 			rtcp_pkt_read_receiver_report(
-				buf, &pos, end, &header, cbs, userdata);
+				buf, &pos, &header, cbs, userdata);
 			break;
 		case RTCP_PKT_TYPE_SDES:
 			rtcp_pkt_read_sdes(
@@ -1085,8 +1107,10 @@ int rtcp_pkt_read(const struct pomp_buffer *buf,
 				buf, &pos, end, &header, cbs, userdata);
 			break;
 		case RTCP_PKT_TYPE_RTPFB:
-			rtcp_pkt_read_rtpfb(
-				buf, &pos, end, &header, cbs, userdata);
+			rtcp_pkt_read_rtpfb(buf, &pos, cbs, userdata);
+			break;
+		default:
+			break;
 		}
 
 		/* In any case, continue after the payload based on the length

@@ -105,7 +105,7 @@ static void compute_jitter(struct rtp_jitter *self,
 	if (delta_rtp > 0)
 		delta_rtp = rtp_timestamp_to_us(delta_rtp, clk_rate);
 	else
-		delta_rtp = -rtp_timestamp_to_us(-delta_rtp, clk_rate);
+		delta_rtp = -(int64_t)rtp_timestamp_to_us(-delta_rtp, clk_rate);
 
 	jitter = delta_rx - delta_rtp;
 	if (jitter < 0)
@@ -128,7 +128,8 @@ static uint64_t compute_skew(struct rtp_jitter *self,
 	delta_send = rtp_timestamp - self->first_rtp_timestamp;
 	if (delta_send < 0) {
 		/* The sender probably restarted */
-		delta_send = -rtp_timestamp_to_us(-delta_send, clk_rate);
+		delta_send =
+			-(int64_t)rtp_timestamp_to_us(-delta_send, clk_rate);
 		ULOGD("reset skew: delta_send(%.6f) < 0",
 		      delta_send / 1000000.0);
 		reset_skew(self, rx_timestamp, rtp_timestamp);
@@ -149,7 +150,6 @@ static uint64_t compute_skew(struct rtp_jitter *self,
 		      self->skew_avg / 1000000.0);
 		reset_skew(self, rx_timestamp, rtp_timestamp);
 		delta_send = 0;
-		delta_recv = 0;
 		skew = 0;
 	}
 
@@ -176,9 +176,14 @@ static uint64_t compute_skew(struct rtp_jitter *self,
 			self->window_pos = 0;
 			self->skew_avg = self->window_min;
 		} else if (rx_timestamp >= self->window_start_timestamp) {
-			uint32_t perc_time =
+			uint64_t diff100 =
 				(rx_timestamp - self->window_start_timestamp) *
-				100 / SKEW_WINDOW_TIMEOUT;
+				100;
+			uint32_t perc_time =
+				diff100 > UINT32_MAX
+					? UINT32_MAX
+					: (uint32_t)(diff100 /
+						     SKEW_WINDOW_TIMEOUT);
 			uint32_t perc_window =
 				self->window_pos * 100 / SKEW_WINDOW_MAX_SIZE;
 			uint32_t perc = perc_time > perc_window ? perc_time
@@ -430,7 +435,7 @@ int rtp_jitter_process(struct rtp_jitter *self, uint64_t cur_timestamp)
 }
 
 
-int rtp_jitter_get_info(struct rtp_jitter *self,
+int rtp_jitter_get_info(const struct rtp_jitter *self,
 			uint32_t *clk_rate,
 			uint32_t *jitter_avg,
 			int64_t *skew_avg)

@@ -134,7 +134,8 @@ int rtp_pkt_read(struct pomp_buffer *buf, struct rtp_pkt *pkt)
 {
 	int res = 0;
 	size_t pos = 0;
-	uint32_t version = 0, csrc_count = 0;
+	uint32_t version = 0;
+	uint32_t csrc_count = 0;
 	uint16_t u16 = 0;
 	uint8_t padding = 0;
 

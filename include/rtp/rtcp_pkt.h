@@ -62,6 +62,9 @@
 #define RTCP_PKT_SDES_TYPE_NOTE 7
 #define RTCP_PKT_SDES_TYPE_PRIV 8
 
+/* RTCP BYE reason for leaving max length (8-bit length field in RFC 3550) */
+#define RTCP_PKT_BYE_REASON_MAX_LEN (UINT8_MAX)
+
 /* 2000 pkts should be enough with a streaming at 9Mbits/s,
  * pkt average size of 500 and report every 100ms. */
 #define RTPFB_MAX_PKT 2000
