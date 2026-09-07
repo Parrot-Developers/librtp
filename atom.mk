@@ -24,9 +24,23 @@ include $(BUILD_LIBRARY)
 
 ifdef TARGET_TEST
 include $(CLEAR_VARS)
-LOCAL_MODULE := tst-rtp
-LOCAL_CFLAGS := -std=gnu99
-LOCAL_SRC_FILES := tests/test_rtp_ntp.c
-LOCAL_LIBRARIES := librtp
+LOCAL_MODULE := tst-librtp
+LOCAL_CFLAGS := -std=gnu99 -DTARGET_TEST -D_GNU_SOURCE
+LOCAL_C_INCLUDES := $(LOCAL_PATH)/src
+LOCAL_SRC_FILES := \
+	tests/rtp_test.c \
+	tests/rtp_test_compare.c \
+	tests/rtp_test_monkey.c \
+	tests/rtp_test_ntp.c \
+	tests/rtp_test_priv.c \
+	tests/rtp_test_rtcp_pkt.c \
+	tests/rtp_test_rtp_jitter.c \
+	tests/rtp_test_rtp_pkt.c \
+	tests/rtp_test_timestamp.c
+LOCAL_LIBRARIES := \
+	libcunit \
+	libfutils \
+	libpomp \
+	librtp
 include $(BUILD_EXECUTABLE)
 endif

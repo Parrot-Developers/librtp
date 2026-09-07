@@ -54,6 +54,7 @@ int rtp_pkt_clone(const struct rtp_pkt *pkt, struct rtp_pkt **ret_obj)
 {
 	struct rtp_pkt *new_pkt = NULL;
 
+	ULOG_ERRNO_RETURN_ERR_IF(pkt == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(ret_obj == NULL, EINVAL);
 
 	*ret_obj = NULL;

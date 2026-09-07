@@ -24,63 +24,70 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <inttypes.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include "rtp/rtp.h"
+#include "rtp_test.h"
 
 
-static void test_ntp_timestamp64(void)
+static CU_SuiteInfo s_suites[] = {
+	{FN("ntp"), NULL, NULL, s_test_ntp},
+	{FN("priv"), NULL, NULL, s_test_priv},
+	{FN("timestamp"), NULL, NULL, s_test_timestamp},
+	{FN("rtp_pkt"), NULL, NULL, s_test_rtp_pkt},
+	{FN("rtcp_pkt"), NULL, NULL, s_test_rtcp_pkt},
+	{FN("rtp_jitter"), NULL, NULL, s_test_rtp_jitter},
+
+	CU_SUITE_INFO_NULL,
+};
+
+
+/* Opt-in fuzz/"monkey" suite, only registered when 'monkey' is given on
+ * argv (see main() below), mirroring libvideo-metadata's tst-vmeta. */
+static CU_SuiteInfo s_monkey_suites[] = {
+	{FN("monkey"), NULL, NULL, s_monkey_rtp},
+
+	CU_SUITE_INFO_NULL,
+};
+
+
+static void run_automated(void)
 {
-	int64_t r = 0;
-	static const struct {
-		struct ntp_timestamp64 t1;
-		struct ntp_timestamp64 t2;
-		int64_t r;
-	} table[] = {
-		{{1, 0x40000000}, {1, 0x20000000}, 125000},
-		{{1, 0x20000000}, {1, 0x40000000}, -125000},
-		{{5, 0x40000000}, {2, 0x20000000}, 3125000},
-		{{5, 0x20000000}, {2, 0x40000000}, 2875000},
-		{{2, 0x40000000}, {5, 0x20000000}, -2875000},
-		{{2, 0x20000000}, {5, 0x40000000}, -3125000},
-	};
-
-	for (uint32_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
-		ntp_timestamp64_diff_us(&table[i].t1, &table[i].t2, &r);
-		printf("%" PRIi64 " %" PRIi64 "\n", r, table[i].r);
-	}
+	CU_automated_run_tests();
+	CU_list_tests_to_file();
 }
 
 
-static void test_ntp_timestamp32(void)
+static void run_basic(void)
 {
-	int64_t r = 0;
-	static const struct {
-		struct ntp_timestamp32 t1;
-		struct ntp_timestamp32 t2;
-		int64_t r;
-	} table[] = {
-		{{1, 0x4000}, {1, 0x2000}, 125000},
-		{{1, 0x2000}, {1, 0x4000}, -125000},
-		{{5, 0x4000}, {2, 0x2000}, 3125000},
-		{{5, 0x2000}, {2, 0x4000}, 2875000},
-		{{2, 0x4000}, {5, 0x2000}, -2875000},
-		{{2, 0x2000}, {5, 0x4000}, -3125000},
-	};
-
-	for (uint32_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
-		ntp_timestamp32_diff_us(&table[i].t1, &table[i].t2, &r);
-		printf("%ld %ld\n", r, table[i].r);
-	}
+	CU_basic_set_mode(CU_BRM_VERBOSE);
+	CU_basic_run_tests();
 }
 
 
-int main()
+int main(int argc, char *argv[])
 {
-	test_ntp_timestamp64();
-	test_ntp_timestamp32();
+	const char *filename;
+	bool monkey = false;
+
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "monkey") == 0)
+			monkey = true;
+	}
+
+	CU_initialize_registry();
+	CU_register_suites(s_suites);
+	if (monkey)
+		CU_register_suites(s_monkey_suites);
+
+	/* Set filename */
+	filename = getenv("CUNIT_OUT_NAME");
+	CU_set_output_filename(filename);
+
+	/* Run tests */
+	if (getenv("CUNIT_AUTOMATED") != NULL)
+		run_automated();
+	else
+		run_basic();
+
+	CU_cleanup_registry();
+
 	return 0;
 }
